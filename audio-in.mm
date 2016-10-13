@@ -11,9 +11,10 @@
 #define kOutputBus 0
 #define kInputBus 1
 
-#define gain 1
-
-AudioBufferList g_bufferList;
+typedef struct data {
+	AudioUnit& AU;
+	AudioBufferList inputBuffer;
+} data;
 
 void checkStatus(OSStatus status, const char *func)
 {
@@ -99,14 +100,10 @@ static OSStatus recordingCallback(void *inRefCon,
 		  UInt32 inNumberFrames,
 		  AudioBufferList *ioData) {
 
-	fprintf(stdout, ">>> recordingCallback\n");
-
-	size_t bytesPerSample = sizeof (Float32);
-	g_bufferList.mNumberBuffers = 1;
-	g_bufferList.mBuffers[0].mNumberChannels = 1;
-	g_bufferList.mBuffers[0].mData = NULL;
-	g_bufferList.mBuffers[0].mDataByteSize = inNumberFrames * bytesPerSample;
-
+	fprintf(stdout, ">>> recordingCallback: frames = %u, bus = %u\n", inNumberFrames, inBusNumber);
+	return noErr;
+}
+/*
 	OSStatus status;
 	AudioComponentInstance audioUnit = (AudioComponentInstance) inRefCon;
 	status = AudioUnitRender(audioUnit,
@@ -114,29 +111,12 @@ static OSStatus recordingCallback(void *inRefCon,
 				inTimeStamp,
 				inBusNumber,
 				inNumberFrames,
-				&g_bufferList);
+				&inputBuffer);
 	checkStatus(status, "AudioUnitRender");
 
 	return noErr;
 }
-
-static OSStatus playbackCallback(void *inRefCon,
-		  AudioUnitRenderActionFlags *ioActionFlags,
-		  const AudioTimeStamp *inTimeStamp,
-		  UInt32 inBusNumber,
-		  UInt32 inNumberFrames,
-		  AudioBufferList *ioData) {
-	fprintf(stdout, ">>> playbackCallback\n");
-
-	for (int i=0; i < ioData->mNumberBuffers; i++) {
-		AudioBuffer buffer = ioData->mBuffers[i];
-		UInt32 size = min(buffer.mDataByteSize, g_bufferList.mBuffers[i].mDataByteSize);
-		memset(buffer.mData, 0, size);
-//		memcpy(buffer.mData, g_bufferList.mBuffers[i].mData, size);
-	}
-
-	return noErr;
-}
+*/
 
 void set_default_device(AudioUnit &AU)
 {
@@ -192,7 +172,6 @@ void set_format(AudioUnit& AU, bool input)
 		AudioFormat.mSampleRate);
 
 	// Set audio format
-	memset(&AudioFormat, 0, sizeof(AudioStreamBasicDescription));
 
 	AudioFormat.mReserved		= 0;
 	AudioFormat.mFormatID		= kAudioFormatLinearPCM;
@@ -201,8 +180,6 @@ void set_format(AudioUnit& AU, bool input)
 	AudioFormat.mFramesPerPacket	= 1;
 	AudioFormat.mBytesPerFrame	= AudioFormat.mBitsPerChannel * AudioFormat.mChannelsPerFrame / 8;
 	AudioFormat.mBytesPerPacket	= AudioFormat.mBytesPerFrame * AudioFormat.mFramesPerPacket;
-//	AudioFormat.mChannelsPerFrame	= 1;
-//	AudioFormat.mSampleRate		= 44100.0;
 
 	status = AudioUnitSetProperty(AU,
 			kAudioUnitProperty_StreamFormat,
@@ -240,6 +217,18 @@ int main(int argc, char **argv)
 	status = AudioComponentInstanceNew(component, &inAU);
 	checkStatus(status, "AudioComponentInstanceNew in");
 
+	// Set input callback
+	AURenderCallbackStruct callbackStruct;
+	callbackStruct.inputProc = recordingCallback;
+	callbackStruct.inputProcRefCon = (void *)inAU;
+	status = AudioUnitSetProperty(inAU,
+				  kAudioOutputUnitProperty_SetInputCallback,
+				  kAudioUnitScope_Global,
+				  kOutputBus,
+				  &callbackStruct,
+				  sizeof(callbackStruct));
+	checkStatus(status, "AudioUnitSetProperty SetInputCallback");
+
 	UInt32 uFlag = 1;
 	status = AudioUnitSetProperty(inAU,
 			kAudioOutputUnitProperty_EnableIO,
@@ -259,18 +248,6 @@ int main(int argc, char **argv)
 	checkStatus(status, "AudioUnitSetProperty EnableIO Scope_Input disable Out");
 
 	set_default_device(inAU);
-
-	// Set input callback
-	AURenderCallbackStruct callbackStruct;
-	callbackStruct.inputProc = recordingCallback;
-	callbackStruct.inputProcRefCon = (void *)inAU;
-	status = AudioUnitSetProperty(inAU,
-				  kAudioOutputUnitProperty_SetInputCallback,
-				  kAudioUnitScope_Global,
-				  kOutputBus,
-				  &callbackStruct,
-				  sizeof(callbackStruct));
-	checkStatus(status, "AudioUnitSetProperty SetInputCallback");
 
 	set_format(inAU, true);
 
