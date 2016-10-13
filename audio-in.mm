@@ -1,5 +1,7 @@
 // g++ -framework AudioUnit -framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework Foundation -o au -Wall audio-in.mm
 
+#include <iostream>
+
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
@@ -11,12 +13,7 @@
 #define kOutputBus 0
 #define kInputBus 1
 
-typedef struct data {
-	AudioUnit& AU;
-	AudioBufferList inputBuffer;
-} data;
-
-void checkStatus(OSStatus status, const char *func)
+static void checkStatus(OSStatus status, const char *func)
 {
 	if ((int)status == 0)
 		return;
@@ -85,13 +82,31 @@ void checkStatus(OSStatus status, const char *func)
 		serr = "Unknown_error";
 	}
 
-	fprintf(stderr, "[%s]: %s (%d)\n", func, serr, (int)status);
+	std::cerr << "[" << func << "]: " << serr << " (" << (int)status << ")" << std::endl;
 }
 
 /*
 	mic -> Input_Scope    / kInputBus /    Output_Scope -> app
 	hph <- Output_Scope   / kOutputBus /   Input_Scope  <- app
 */
+
+class MyRecorder {
+public:
+	MyRecorder();
+	~MyRecorder();
+
+	void start();
+	void stop();
+	AudioUnit get_au() { return m_au; };
+
+	OSStatus set_input_callback();
+	OSStatus set_default_device();
+	OSStatus set_format();
+	OSStatus set_IO_enable();
+
+private:
+	AudioUnit m_au;
+};
 
 static OSStatus recordingCallback(void *inRefCon,
 		  AudioUnitRenderActionFlags *ioActionFlags,
@@ -100,30 +115,55 @@ static OSStatus recordingCallback(void *inRefCon,
 		  UInt32 inNumberFrames,
 		  AudioBufferList *ioData) {
 
-	fprintf(stdout, ">>> recordingCallback: frames = %u, bus = %u\n", inNumberFrames, inBusNumber);
-	return noErr;
-}
-/*
+	std::cout << ">>> recordingCallback: frames = " << inNumberFrames << " bus = " << inBusNumber << std::endl;
+
+	AudioBufferList bufferList;
+	size_t bytesPerSample = sizeof (Float32);
+	bufferList.mNumberBuffers = 1;
+	bufferList.mBuffers[0].mNumberChannels = 1;
+	bufferList.mBuffers[0].mData = NULL;
+	bufferList.mBuffers[0].mDataByteSize = inNumberFrames * bytesPerSample;
+
 	OSStatus status;
-	AudioComponentInstance audioUnit = (AudioComponentInstance) inRefCon;
+	AudioUnit audioUnit = (AudioUnit)(((MyRecorder *)inRefCon)->get_au());
 	status = AudioUnitRender(audioUnit,
 				ioActionFlags,
 				inTimeStamp,
 				inBusNumber,
 				inNumberFrames,
-				&inputBuffer);
+				&bufferList);
 	checkStatus(status, "AudioUnitRender");
 
 	return noErr;
 }
-*/
 
-void set_default_device(AudioUnit &AU)
+OSStatus MyRecorder::set_input_callback()
+{
+	OSStatus status;
+
+	AURenderCallbackStruct callbackStruct;
+	callbackStruct.inputProc = recordingCallback;
+	callbackStruct.inputProcRefCon = (void *)this;
+	status = AudioUnitSetProperty(m_au,
+				  kAudioOutputUnitProperty_SetInputCallback,
+				  kAudioUnitScope_Global,
+				  kOutputBus,
+				  &callbackStruct,
+				  sizeof(callbackStruct));
+	checkStatus(status, "AudioUnitSetProperty SetInputCallback");
+	if (status != 0)
+		return status;
+
+	return noErr;
+}
+
+OSStatus MyRecorder::set_default_device()
 {
 	OSStatus status;
 
 	AudioDeviceID defaultDevice = kAudioObjectUnknown;
 	UInt32 propertySize = sizeof (defaultDevice);
+
 	AudioObjectPropertyAddress defaultDeviceProperty;
 	defaultDeviceProperty.mSelector = kAudioHardwarePropertyDefaultInputDevice;
 	defaultDeviceProperty.mScope = kAudioObjectPropertyScopeGlobal;
@@ -136,42 +176,46 @@ void set_default_device(AudioUnit &AU)
 			&propertySize,
 			&defaultDevice);
 	checkStatus(status, "AudioObjectGetPropertyData DefaultInputDevice");
+	if (status != 0)
+		return status;
 
-	status = AudioUnitSetProperty(AU,
+	status = AudioUnitSetProperty(m_au,
 			kAudioOutputUnitProperty_CurrentDevice,
 			kAudioUnitScope_Global,
 			kInputBus,
 			&defaultDevice,
 			sizeof(defaultDevice));
 	checkStatus(status, "AudioUnitSetProperty CurrentDevice");
+	if (status != 0)
+		return status;
+
+	return noErr;
 }
 
-void set_format(AudioUnit& AU, bool input)
+OSStatus MyRecorder::set_format()
 {
 	OSStatus status;
-	// Get audio format
+
 	AudioStreamBasicDescription AudioFormat;
 	UInt32 size = sizeof(AudioFormat);
-	status = AudioUnitGetProperty(AU,
+
+	status = AudioUnitGetProperty(m_au,
 			kAudioUnitProperty_StreamFormat,
-			input? kAudioUnitScope_Input : kAudioUnitScope_Output,
-			input ? kInputBus : kOutputBus,
+			kAudioUnitScope_Input,
+			kInputBus,
 			&AudioFormat,
 			&size);
 	checkStatus(status, "AudioUnitGetProperty StreamFormat");
+	if (status != 0)
+		return status;
 
-	fprintf(stdout, "%s - AudioFormat: \n\t"
-                "format_id=%d\n\tformat_flags=%x\n\tframes_per_pack=%d\n\t"
-                "channels_per_frame=%d\n\tbits_per_channel=%d\n\tsample_rate=%lf\n",
-		input ? "in" : "out",
-		AudioFormat.mFormatID,
-		AudioFormat.mFormatFlags,
-		AudioFormat.mFramesPerPacket,
-		AudioFormat.mChannelsPerFrame,
-		AudioFormat.mBitsPerChannel,
-		AudioFormat.mSampleRate);
-
-	// Set audio format
+	std::cout << "AudioFormat: " << std::endl;
+	std::cout << "format_id=" << AudioFormat.mFormatID << std::endl;
+	std::cout << "format_flags=" << AudioFormat.mFormatFlags << std::endl;
+	std::cout << "frames_per_pack=" << AudioFormat.mFramesPerPacket << std::endl;
+	std::cout << "channels_per_frame=" << AudioFormat.mChannelsPerFrame << std::endl;
+	std::cout << "bits_per_channel=" <<  AudioFormat.mBitsPerChannel << std::endl;
+	std::cout << "sample_rate=" << AudioFormat.mSampleRate <<std::endl;
 
 	AudioFormat.mReserved		= 0;
 	AudioFormat.mFormatID		= kAudioFormatLinearPCM;
@@ -181,28 +225,77 @@ void set_format(AudioUnit& AU, bool input)
 	AudioFormat.mBytesPerFrame	= AudioFormat.mBitsPerChannel * AudioFormat.mChannelsPerFrame / 8;
 	AudioFormat.mBytesPerPacket	= AudioFormat.mBytesPerFrame * AudioFormat.mFramesPerPacket;
 
-	status = AudioUnitSetProperty(AU,
+	status = AudioUnitSetProperty(m_au,
 			kAudioUnitProperty_StreamFormat,
-			input? kAudioUnitScope_Output : kAudioUnitScope_Input,
-			input ? kInputBus : kOutputBus,
+			kAudioUnitScope_Output,
+			kInputBus,
 			&AudioFormat,
 			sizeof(AudioFormat));
 	checkStatus(status, "AudioUnitSetProperty StreamFormat Scope_In/Output");
+	if (status != 0)
+		return status;
+
+	return noErr;
 }
 
-/*
-	mic -> Input_Scope    / kInputBus /    Output_Scope -> app
-	hph <- Output_Scope   / kOutputBus /   Input_Scope  <- app
-*/
-
-int main(int argc, char **argv)
+OSStatus MyRecorder::set_IO_enable()
 {
-	fprintf(stdout, "Tuning environment\n");
-
 	OSStatus status;
-	AudioUnit inAU;
 
-	// Describe audio component
+	UInt32 uFlag = 1;
+	status = AudioUnitSetProperty(m_au,
+			kAudioOutputUnitProperty_EnableIO,
+			kAudioUnitScope_Input,
+			kInputBus,
+			&uFlag,
+			sizeof(uFlag));
+	checkStatus(status, "AudioUnitSetProperty EnableIO Scope_Input enable In");
+	if (status != 0)
+		return status;
+
+	uFlag = 0;
+	status = AudioUnitSetProperty(m_au,
+			kAudioOutputUnitProperty_EnableIO,
+			kAudioUnitScope_Output,
+			kOutputBus,
+			&uFlag,
+			sizeof(uFlag));
+	checkStatus(status, "AudioUnitSetProperty EnableIO Scope_Input disable Out");
+	if (status != 0)
+		return status;
+
+	return noErr;
+}
+
+void MyRecorder::start()
+{
+	OSStatus status;
+
+	status = AudioUnitInitialize(m_au);
+	checkStatus(status, "AudioUnitInitialize");
+	std::cout << "Initialize InAudioUnit" << std::endl;
+
+	status = AudioOutputUnitStart(m_au);
+	checkStatus(status, "AudioUnitStart");
+	std::cout << "Start InAudioUnit" << std::endl;
+}
+
+void MyRecorder::stop()
+{
+	OSStatus status;
+
+	status = AudioOutputUnitStop(m_au);
+	checkStatus(status, "AudioUnitStop");
+	std::cout << "Stop InAudioUnit\n" << std::endl;
+
+	status = AudioUnitUninitialize(m_au);
+	checkStatus(status, "AudioUnitUninitialize");
+}
+
+MyRecorder::MyRecorder()
+{
+	OSStatus status;
+
 	AudioComponentDescription desc;
 	desc.componentType = kAudioUnitType_Output;
 	desc.componentSubType = kAudioUnitSubType_HALOutput;
@@ -210,66 +303,53 @@ int main(int argc, char **argv)
 	desc.componentFlags = 0;
 	desc.componentFlagsMask = 0;
 
-	// Get component
 	AudioComponent component = AudioComponentFindNext(NULL, &desc);
 
-	// Get audio units
-	status = AudioComponentInstanceNew(component, &inAU);
-	checkStatus(status, "AudioComponentInstanceNew in");
+	status = AudioComponentInstanceNew(component, &m_au);
+	checkStatus(status, "AudioComponentInstanceNew");
+}
 
-	// Set input callback
-	AURenderCallbackStruct callbackStruct;
-	callbackStruct.inputProc = recordingCallback;
-	callbackStruct.inputProcRefCon = (void *)inAU;
-	status = AudioUnitSetProperty(inAU,
-				  kAudioOutputUnitProperty_SetInputCallback,
-				  kAudioUnitScope_Global,
-				  kOutputBus,
-				  &callbackStruct,
-				  sizeof(callbackStruct));
-	checkStatus(status, "AudioUnitSetProperty SetInputCallback");
+MyRecorder::~MyRecorder()
+{
+	AudioComponentInstanceDispose(m_au);
+}
 
-	UInt32 uFlag = 1;
-	status = AudioUnitSetProperty(inAU,
-			kAudioOutputUnitProperty_EnableIO,
-			kAudioUnitScope_Input,
-			kInputBus,
-			&uFlag,
-			sizeof(uFlag));
-	checkStatus(status, "AudioUnitSetProperty EnableIO Scope_Input enable In");
+int main(int argc, char **argv)
+{
+	OSStatus status;
 
-	uFlag = 0;
-	status = AudioUnitSetProperty(inAU,
-			kAudioOutputUnitProperty_EnableIO,
-			kAudioUnitScope_Output,
-			kOutputBus,
-			&uFlag,
-			sizeof(uFlag));
-	checkStatus(status, "AudioUnitSetProperty EnableIO Scope_Input disable Out");
+	MyRecorder recorder;
 
-	set_default_device(inAU);
+	status = recorder.set_input_callback();
+	if (status != 0) {
+		std::cerr << "Cannot set input callback" << std::endl;
+		return -1;
+	}
 
-	set_format(inAU, true);
+	status = recorder.set_IO_enable();
+	if (status != 0) {
+		std::cerr << "Cannot set IO enable" << std::endl;
+		return -1;
+	}
 
-	// Initialise
-	status = AudioUnitInitialize(inAU);
-	checkStatus(status, "AudioUnitInitialize in");
-	fprintf(stdout, "Initialize InAudioUnit\n");
+	status = recorder.set_default_device();
+	if (status != 0) {
+		std::cerr << "Cannot set default device" << std::endl;
+		return -1;
+	}
 
-	status = AudioOutputUnitStart(inAU);
-	checkStatus(status, "AudioUnitStart in");
-	fprintf(stdout, "Start InAudioUnit\n");
+	status = recorder.set_format();
+	if (status != 0) {
+		std::cerr << "Cannot set format" << std::endl;
+		return -1;
+	}
 
-	sleep(1);
+	recorder.start();
 
-	status = AudioOutputUnitStop(inAU);
-	checkStatus(status, "AudioUnitStop in");
-	fprintf(stdout, "Stop InAudioUnit\n");
+	std::string f;
+	std::getline(std::cin, f);
 
-	status = AudioUnitUninitialize(inAU);
-	checkStatus(status, "AudioUnitUninitialize in");
-
-	AudioComponentInstanceDispose(inAU);
+	recorder.stop();
 
 	return 0;
 }
