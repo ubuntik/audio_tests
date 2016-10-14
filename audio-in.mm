@@ -104,9 +104,12 @@ public:
 	OSStatus set_format();
 	OSStatus set_IO_enable();
 
+	FILE *fd;
 private:
 	AudioUnit m_au;
 };
+
+int cnt = 0;
 
 static OSStatus recordingCallback(void *inRefCon,
 		  AudioUnitRenderActionFlags *ioActionFlags,
@@ -123,9 +126,10 @@ static OSStatus recordingCallback(void *inRefCon,
 	bufferList.mBuffers[0].mNumberChannels = 1;
 	bufferList.mBuffers[0].mData = NULL;
 	bufferList.mBuffers[0].mDataByteSize = inNumberFrames * bytesPerSample;
+	MyRecorder *rec = (MyRecorder *)inRefCon;
 
 	OSStatus status;
-	AudioUnit audioUnit = (AudioUnit)(((MyRecorder *)inRefCon)->get_au());
+	AudioUnit audioUnit = (AudioUnit)(rec->get_au());
 	status = AudioUnitRender(audioUnit,
 				ioActionFlags,
 				inTimeStamp,
@@ -133,6 +137,10 @@ static OSStatus recordingCallback(void *inRefCon,
 				inNumberFrames,
 				&bufferList);
 	checkStatus(status, "AudioUnitRender");
+	float *data = (float *)bufferList.mBuffers[0].mData;
+
+	for (int i = 0; i < inNumberFrames; i++)
+		fprintf(rec->fd, "%d %f\n", cnt++, data[i]);
 
 	return noErr;
 }
@@ -307,11 +315,17 @@ MyRecorder::MyRecorder()
 
 	status = AudioComponentInstanceNew(component, &m_au);
 	checkStatus(status, "AudioComponentInstanceNew");
+
+	fd = fopen("plot.dat", "w");
+	if (fd == NULL)
+		std::cerr << "Cannot open file plot.dat" << std::endl;
 }
 
 MyRecorder::~MyRecorder()
 {
 	AudioComponentInstanceDispose(m_au);
+
+	fclose(fd);
 }
 
 int main(int argc, char **argv)
