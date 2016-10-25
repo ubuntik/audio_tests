@@ -23,6 +23,8 @@ set title 'Audio'
 set xlabel 'time'
 set ylabel 'Ampl'
 
+#set xrange [25000:30000]
+
 plot 'plot.dat' u 1:2 t 'Input' w lp ls 1, \
 	""	u 1:3 t 'Echoed' w lp ls 2
 
