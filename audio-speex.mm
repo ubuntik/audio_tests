@@ -160,7 +160,7 @@ static OSStatus recordingCallback(void *inRefCon,
 		echoed[i] = (float)out[i] / 32767.0f;
 
 	for (int i = 0; i < inNumberFrames; i++)
-		fprintf(rec->fd, "%d %f %f %f\n", cnt++, data[i], echoed[i], (float)(decimated[i] / 32767.0f));
+		fprintf(rec->fd, "%d %f %f\n", cnt++, data[i], echoed[i]);
 
 	return noErr;
 }
