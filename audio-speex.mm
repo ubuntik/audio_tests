@@ -16,6 +16,44 @@
 #define kOutputBus 0
 #define kInputBus 1
 
+#define FS 4
+#define SZ 512
+
+struct el {
+	void *next;
+	void *data;
+};
+
+class ring_buf
+{
+public:
+	ring_buf()
+	{
+		m_buf[0].data = calloc(SZ, 1);
+		for(int i = 1; i < FS; i++) {
+			m_buf[i].data = calloc(SZ, 1);
+			m_buf[i - 1].next = m_buf[i].data;
+		}
+		m_buf[FS - 1].next = m_buf[0].data;
+		m_crt = 0;
+	};
+
+	~ring_buf()
+	{
+		for(int i = 0; i < FS; i++)
+			free(m_buf[i].data);
+	};
+
+	void get(void *src) { shift(); memcpy(src, m_buf[m_crt].data, SZ); };
+	void set(void *src) { memcpy(m_buf[m_crt].next , src, SZ); shift(); };
+
+private:
+	void shift() { m_crt = (m_crt + 1) % FS; };
+
+	volatile int m_crt;
+	el m_buf[FS];
+};
+
 static void checkStatus(OSStatus status, const char *func)
 {
 	if ((int)status == 0)
@@ -151,7 +189,7 @@ static OSStatus recordingCallback(void *inRefCon,
 	for (int i = 0; i < inNumberFrames; i++)
 		in[i] = (short)(data[i] * 32767.0f);
 
-	short *decimated = (short *)malloc(bytesPerFrame);
+	short *decimated = (short *)calloc(inNumberFrames, bytesPerSample);
 //	memcpy((void *)out, (void *)in, inNumberFrames * sizeof(short));
 	speex_echo_cancellation(rec->estate, in, decimated, out);
 	speex_preprocess_run(rec->pstate, out);
@@ -340,9 +378,10 @@ MyRecorder::MyRecorder()
 	if (fd == NULL)
 		std::cerr << "Cannot open file plot.dat" << std::endl;
 
-
+	UInt32 sampleRate = 44100;
 	estate = speex_echo_state_init(294, 14700);
-	pstate = speex_preprocess_state_init(294, 44100);
+	pstate = speex_preprocess_state_init(294, sampleRate);
+	speex_echo_ctl(estate, SPEEX_ECHO_SET_SAMPLING_RATE, &sampleRate);
 	speex_preprocess_ctl(pstate, SPEEX_PREPROCESS_SET_ECHO_STATE, estate);
 }
 
