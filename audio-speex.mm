@@ -1,6 +1,7 @@
-// g++ -framework AudioUnit -framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework Foundation -I/usr/local/include -L/usr/local/lib -lspeex -o au -Wall audio-speex.mm
+// g++ -framework AudioUnit -framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework Foundation -I/usr/local/include -L/usr/local/lib -lspeex -lspeexdsp -lpthread -o au -Wall audio-speex.mm
 
 #include <iostream>
+#include <pthread.h>
 #include <speex/speex.h>
 #include <speex/speex_echo.h>
 #include <speex/speex_preprocess.h>
@@ -9,6 +10,12 @@
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
 #include <CoreFoundation/CoreFoundation.h>
+
+#define MUTEX pthread_mutex_t
+#define INIT(m) pthread_mutex_init(&m, NULL);
+#define DESTROY(m) pthread_mutex_destroy(&m);
+#define LOCK(m) pthread_mutex_lock(&m)
+#define UNLOCK(m) pthread_mutex_unlock(&m)
 
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 #define min(a, b) (((a) < (b)) ? (a) : (b))
@@ -36,21 +43,24 @@ public:
 		}
 		m_buf[FS - 1].next = m_buf[0].data;
 		m_crt = 0;
+		INIT(m_mutex);
 	};
 
 	~ring_buf()
 	{
 		for(int i = 0; i < FS; i++)
 			free(m_buf[i].data);
+		DESTROY(m_mutex);
 	};
 
-	void get(void *src) { shift(); memcpy(src, m_buf[m_crt].data, SZ); };
-	void set(void *src) { memcpy(m_buf[m_crt].next , src, SZ); shift(); };
+	void get(void *src) { LOCK(m_mutex); shift(); memcpy(src, m_buf[m_crt].data, SZ); UNLOCK(m_mutex); };
+	void set(void *src) { LOCK(m_mutex); memcpy(m_buf[m_crt].next , src, SZ); shift(); UNLOCK(m_mutex); };
 
 private:
 	void shift() { m_crt = (m_crt + 1) % FS; };
 
 	volatile int m_crt;
+	MUTEX m_mutex;
 	el m_buf[FS];
 };
 
